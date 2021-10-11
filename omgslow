@@ -1,0 +1,219 @@
+#!/bin/bash
+#
+# OMG Slow!!!!!!
+# Monitor Ping Latency
+#
+# chkconfig: 2345 99 1
+# description: Monitors ping latency and alerts admins \
+#               when unusual increases occur.
+# pidfile: /var/run/omgslow.pid
+#
+# This script has currently been tested on CentOS based systems.
+#
+
+#####
+# Begin setup work
+#####
+
+# Initialization
+PATH="/sbin:/bin:/usr/bin:/usr/sbin"
+RETVAL=0
+
+# Check that we are root
+if [ "$(id -u)" != "0" ]; then
+    echo "${0} must be run as root"
+    exit 1
+fi
+
+# Get config
+[ -f "/etc/sysconfig/omgslow" ] && . /etc/sysconfig/omgslow
+[ -f "/etc/init.d/functions" ] && . /etc/init.d/functions
+
+# If admin email address is not set in syconfig, set to local root.
+[ -z "${ADMIN_EMAIL}" ] && ADMIN_EMAIL="root@localhost"
+
+# If pid file path is not set in sysconfig, set to /var/run/omgslow.pid.
+[ -z "${OMGSLOW_PIDFILE}" ] && OMGSLOW_PIDFILE="/var/run/omgslow.pid"
+
+# -------------------------------------------------------------------
+
+# If omgslow home variable has not been specified, use /opt/omgslow
+if [ -z "${OMGSLOW_HOME}" -o ! -d "${OMGSLOW_HOME}" ]; then
+
+    if [ ! -d "/opt/omgslow" ]; then
+
+        # create home directory and log directory
+        mkdir -p "/opt/omgslow/logs"
+        OMGSLOW_HOME="/opt/omgslow"
+
+    fi
+
+fi
+
+# If log path is not set in sysconfig, set to ${OMGSLOW_HOME}/logs.
+[ -z "${OMGSLOW_LOGDIR}" ] && OMGSLOW_LOGDIR="${OMGSLOW_HOME}/logs"
+
+#####
+# End setup work
+#####
+
+start() {
+
+    OLD_PWD=$(pwd)
+    cd ${OMGSLOW_LOGDIR}
+
+    PID=$(findPID)
+    if [ -n "${PID}" ]; then
+
+        echo "OMGSlow is already running."
+        RETVAL=1
+        return
+
+    fi
+
+    # start daemon
+    echo -n "Starting OMGSlow: "
+
+    rm -f nohup.out
+    su -s /bin/sh -c "nohup ${OMGSLOW_RUN_CMD} > ${OMGSLOW_LOGDIR}/nohup.out 2>&1 &" "${OMGSLOW_USER}"
+    RETVAL=$?
+
+    echo -en "\e[60G"
+    echo -en "["
+    if [ "${RETVAL}" -eq 0 -a -d /var/lock/subsys ]; then
+
+        touch /var/lock/subsys/omgslow
+        echo -en "\e[1;92m"
+        echo -en "  OK  "
+
+    else
+
+        echo -en "\e[1;91m"
+        echo -en "FAILED"
+
+    fi
+
+    echo -en "\e[0;0m"
+    echo -e "]"
+
+    echo ""
+    sleep 1 # allows prompt to return
+
+    PID=$(findPID)
+    echo "${PID}" > "${OMGSLOW_PIDFILE}"
+
+    cd "${OLD_PWD}"
+
+}
+
+stop() {
+
+    # stop deamon
+    echo -n "Shutting down OMGSlow: "
+
+    RETVAL=0
+    if [ -f "${OMGSLOW_PIDFILE}" ]; then
+
+        killproc -p "${OMGSLOW_PIDFILE}" -d 10
+        rm -f "${OMGSLOW_PIDFILE}"
+
+    else
+
+        PID=$(findPID)
+        if [ -n "${PID}" ]; then
+
+            kill "${PID}"
+
+        else
+
+            echo "OMGSlow is not running."
+            RETVAL=1
+        fi
+
+    fi
+
+    echo -en "\e[60G"
+    echo -en "["
+    if [ "${RETVAL}" -eq 0 -a -f "/var/lock/subsys/omgslow" ]; then
+
+        rm -f /var/lock/subsys/omgslow
+        echo -en "\e[1;92m"
+        echo -en "  OK  "
+
+    else
+
+        echo -en "\e[1;91m"
+        echo -en "FAILED"
+
+    fi
+
+    echo -en "\e[0;0m"
+    echo -e "]"
+
+    echo ""
+    sleep 1 # allow prompt to return
+
+}
+
+restart() {
+
+    stop
+    sleep 10 # give a few moments to shutdown
+    start
+
+}
+
+condrestart() {
+
+    [ -e "/var/lock/subsys/omgslow" ] && restart
+    return 0
+
+}
+
+status() {
+
+    PID=$(findPID)
+    if [ -n "${PID}" ]; then
+
+        echo "OMGSlow is running."
+        RETVAL=0
+
+    else
+
+        echo "OMGSlow is not running."
+        RETVAL=1
+
+    fi
+
+}
+
+findPID() {
+
+    echo $(ps ax --width=1000 | grep omgslow | grep run.sh  | awk '{print $1}')
+
+}
+
+# Handle how we are called
+case "${1}" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    condrestart)
+        condrestart
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage ${0} {start|stop|restart|status|condrestart}"
+        RETVAL=1
+esac
+
+exit "${RETVAL}"
+
